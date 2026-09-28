@@ -1,0 +1,9 @@
+# Ignore build artifacts and generated files
+build/
+devel/
+install/
+log/
+
+# Ignore local machine setups
+.catkin_workspace
+.ami_config
