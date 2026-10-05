@@ -16,6 +16,9 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+algorithms/.kilo
+algorithms/scripts/.kilo
+algrithms/scripts/task1a/.kilo
 
 # What the evaluator writes: your run's report, and the folder it goes in. Upload the
 # result.zip as the task page describes -- do not commit it.
