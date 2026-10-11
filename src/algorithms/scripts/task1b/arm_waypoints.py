@@ -18,8 +18,8 @@
 *****************************************************************************************
 '''
 
-# Team ID:          [ Team-ID ]
-# Author List:		[ Names of team members worked on this file separated by Comma: Name1, Name2, ... ]
+# Team ID:          eYRC#4101
+# Author List:		Joyal George,Adithyan A,Anandhu Saji,P H Girisankar
 # Filename:		   task1b_boilerplate.py
 # Functions:
 #			       [ Comma separated list of functions in this file ]
@@ -103,6 +103,14 @@ REACH_SOFT, REACH_HARD = 0.68, 0.85       # slow down near full extension
 WARN_SCALE = 0.4                          # speed factor while a warning code shows
 SING_SOFT, SING_HARD = 0.50, 0.15         # sin() of elbow / wrist_2 thresholds
 SING_MIN_SCALE = 0.25
+
+# Tool tilt at long reach (keeps the elbow bent, away from the elbow singularity).
+# With the tool held straight down, waypoints 3 and 4 need an almost straight elbow
+# (sin(elbow) ~ 0.3). Tipping the tool tip OUTWARD by up to TILT_MAX_DEG as the tool radius
+# grows from TILT_R0 to TILT_R1 pulls the wrist in, so the elbow stays bent along the route.
+TILT_MAX_DEG = 18.0
+TILT_R0, TILT_R1 = 0.55, 0.90             # m, tool radius from the base axis where the tilt ramps up
+KP_ORI = 2.0                              # orientation gain (output still capped at W_MAX)
 
 MAX_RECOVERIES = 10                       # safety cap on unlocks over the whole run
 RETREAT_TIMEOUT_S = 6.0                   # then unlock again
@@ -471,7 +479,9 @@ class arm_waypoints(Node):
 
         err, dist = self._error_to(waypoints[self.wp_index])
         self.get_logger().info(
-            f'WP{self.wp_index + 1} dist={dist * 1000:.1f}mm state={self.state}',
+            f'WP{self.wp_index + 1} dist={dist * 1000:.1f}mm state={self.state} '
+            f'sin(elbow)={abs(math.sin(self.joint_angles[2])):.2f} '
+            f'sin(wrist2)={abs(math.sin(self.joint_angles[4])):.2f}',
             throttle_duration_sec=1.0)
 
         if self.state == 'MOVE':
@@ -550,12 +560,28 @@ class arm_waypoints(Node):
     def _open_pose_error(self):
         return [t - c for t, c in zip(OPEN_POSE, self.joint_angles)]
 
+    def _desired_orientation(self):
+        '''
+        The captured (tool-down) orientation, tipped outward by an angle that grows with the
+        tool's distance from the base axis. Within TILT_R0 it is exactly the captured one.
+        '''
+        p = self.tcp_pose.position
+        r = math.hypot(p.x, p.y)
+        k = min(1.0, max(0.0, (r - TILT_R0) / (TILT_R1 - TILT_R0)))
+        if k <= 0.0:
+            return self.target_orientation
+        phi = math.radians(TILT_MAX_DEG) * k
+        th = math.atan2(p.y, p.x)
+        s = math.sin(-phi / 2.0)                                                        # axis: horizontal, perpendicular to the radial direction
+        q_tilt = (math.cos(phi / 2.0), -math.sin(th) * s, math.cos(th) * s, 0.0)
+        return quat_mult(q_tilt, self.target_orientation)
+
     def _hold_orientation(self):
-        '''Angular velocity (base_link) that returns the tool to the captured orientation.'''
+        '''Angular velocity (base_link) that turns the tool onto the desired orientation.'''
         o = self.tcp_pose.orientation
         q_inv = (o.w, -o.x, -o.y, -o.z)
-        rv = quat_to_rotvec(quat_mult(self.target_orientation, q_inv))
-        return clamp_norm(rv, W_MAX)
+        rv = quat_to_rotvec(quat_mult(self._desired_orientation(), q_inv))
+        return clamp_norm(tuple(KP_ORI * c for c in rv), W_MAX)
 
     def _speed_scale(self):
         '''
